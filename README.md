@@ -2,6 +2,8 @@
 
 A website for graphing complex numbers, loci and regions on the Argand diagram. It has no dependencies and works offline.
 
+**Live site:** https://lukehv.github.io/complex-plane/
+
 **To open it:** double-click `index.html`. You can also serve the folder, e.g. `python3 -m http.server`, and visit http://localhost:8000.
 
 ## What you can type (one thing per line)
@@ -48,3 +50,7 @@ When you aren't editing a line, it is shown as typeset maths: stacked fractions,
 - `js/parser.js`: the expression language: tokenizer, parser and compiler
 - `js/mathrender.js`: typesets expressions as HTML maths and formats exact values
 - `js/app.js`: analysing each line, drawing (marching squares for loci, Newton's method for solutions) and the interface
+
+## Publishing updates
+
+Run `./scripts/publish-site.sh`. It copies the site files into `upload/complex-plane-grapher` (drag that folder onto Netlify's **Deploys** page) and pushes them to the public [complex-plane](https://github.com/LukeHV/complex-plane) repository that serves the GitHub Pages site. This repository stays private.
