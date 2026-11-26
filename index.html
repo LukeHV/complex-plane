@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Complex Plane Grapher</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233b6fd8'/%3E%3Cpath d='M16 5v22M5 16h22' stroke='%23fff' stroke-width='2' opacity='.6'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3Ccircle cx='21' cy='11' r='2.6' fill='%23ffd166'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#3b6fd8"/><path d="M16 5v22M5 16h22" stroke="#fff" stroke-width="2" opacity=".6"/><circle cx="16" cy="16" r="7" fill="none" stroke="#fff" stroke-width="2.5"/><circle cx="21" cy="11" r="2.6" fill="#ffd166"/></svg>
+      <span>Complex Plane Grapher</span>
+    </div>
+    <nav class="actions">
+      <div class="menu-wrap">
+        <button id="examplesBtn" class="btn" aria-haspopup="true">Examples <span class="caret">▾</span></button>
+        <div id="examplesMenu" class="dropdown" hidden></div>
+      </div>
+      <div class="menu-wrap">
+        <button id="settingsBtn" class="btn" aria-haspopup="true">Display <span class="caret">▾</span></button>
+        <div id="settingsMenu" class="dropdown settings" hidden>
+          <div class="set-label">Grid</div>
+          <div class="seg" id="gridSeg">
+            <button data-grid="cartesian">Square</button><button data-grid="polar">Polar</button><button data-grid="none">None</button>
+          </div>
+          <label class="check"><input type="checkbox" id="optNumbers"> Axis numbers</label>
+          <label class="check"><input type="checkbox" id="optVectors"> Arrows from 0 to points</label>
+          <label class="check"><input type="checkbox" id="optLabels"> Label points</label>
+          <label class="check"><input type="checkbox" id="optRings"> Modulus rings in domain colouring</label>
+        </div>
+      </div>
+      <button id="helpBtn" class="btn">Help</button>
+      <button id="shareBtn" class="btn" title="Share or open a graph">Share</button>
+      <button id="exportBtn" class="btn" title="Save or copy the graph as an image"><span class="long">Save image</span><span class="short">Save</span></button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <aside class="panel" id="panel">
+      <div class="list" id="list" role="list"></div>
+      <div class="keypad" id="keypad" aria-label="Symbol keypad"></div>
+    </aside>
+
+    <section class="stage" id="stage">
+      <canvas id="plot" tabindex="0" role="img" aria-label="Graph of the complex plane. Arrow keys pan, plus and minus zoom, 0 resets the view."></canvas>
+      <div class="zoom-controls">
+        <button id="zoomIn" title="Zoom in">+</button>
+        <button id="zoomOut" title="Zoom out">−</button>
+        <button id="zoomHome" title="Reset view">⌂</button>
+      </div>
+      <div class="readout" id="readout" hidden></div>
+      <div class="hint" id="hint">Drag to pan · scroll to zoom · double-click to add a point</div>
+    </section>
+  </main>
+
+  <div class="popover" id="swatchPop" hidden></div>
+
+  <div class="modal-backdrop" id="helpModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+      <button class="modal-close" aria-label="Close">×</button>
+      <h2 id="helpTitle">How to use the grapher</h2>
+      <p class="lead">Type one thing per line on the left. Click any <code class="demo">grey example</code> below to add it to your graph.</p>
+      <div class="help-grid">
+        <section>
+          <h3>Numbers &amp; points</h3>
+          <p>Any complex number is plotted as a point.</p>
+          <p><code class="try">3 + 4i</code> <code class="try">2e^(iπ/3)</code> <code class="try">cis(π/4)</code></p>
+          <p>Give it a name to reuse it. Named numbers can be <b>dragged</b> on the graph.</p>
+          <p><code class="try">a = 1 + 2i</code> <code class="try">b = -2 + i</code> <code class="try">a + b</code> <code class="try">a b</code> <code class="try">conj(a)</code></p>
+        </section>
+        <section>
+          <h3>Loci (equations in z)</h3>
+          <p>Use <b>z</b> for the moving point.</p>
+          <p>Circle: <code class="try">|z - 1 - i| = 2</code></p>
+          <p>Perpendicular bisector: <code class="try">|z - 2| = |z + 2i|</code></p>
+          <p>Half-line: <code class="try">arg(z - 1) = π/4</code></p>
+          <p>Ellipse: <code class="try">|z - 2| + |z + 2| = 6</code></p>
+          <p>Arc: <code class="try">arg(z - 2) - arg(z + 2) = π/3</code></p>
+          <p>Lines: <code class="try">Re(z) = 3</code> <code class="try">y = 2x + 1</code></p>
+        </section>
+        <section>
+          <h3>Regions (inequalities)</h3>
+          <p>Use <b>&lt;  &gt;  ≤  ≥</b>, chain them, and join with <b>and</b> / <b>or</b>.</p>
+          <p><code class="try">|z| ≤ 2</code> <code class="try">1 < |z - i| < 2</code></p>
+          <p><code class="try">|z| < 3 and 0 ≤ arg(z) ≤ π/3</code></p>
+          <p><code class="try">|z - 1| < |z + 1|</code></p>
+          <p>Strict inequalities get a dashed edge, ≤ and ≥ a solid one.</p>
+        </section>
+        <section>
+          <h3>Solving equations</h3>
+          <p>A complex equation shows its solutions as points.</p>
+          <p><code class="try">z^5 = 1</code> <code class="try">z^2 = -3 + 4i</code> <code class="try">z^3 + z + 1 = 0</code></p>
+          <p>Where two loci meet – join two equations with <b>and</b>:</p>
+          <p><code class="try">|z - 1| = 2 and arg(z) = π/4</code></p>
+          <h3>Curves &amp; functions</h3>
+          <p>Parametric curve in <b>t</b> (or θ): <code class="try">z = 2e^(it)</code> <code class="try">t e^(it)</code></p>
+          <p>Functions: <code class="try">f(z) = z^2 + 1</code> then <code class="try">|f(z)| = 2</code></p>
+          <p>A bare expression in z draws its domain colouring: <code class="try">(z^2 - 1)/(z^2 + 1)</code></p>
+        </section>
+        <section>
+          <h3>Sliders</h3>
+          <p>A name set to a plain number becomes a slider. Press ▶ to animate it, and <b>+ i</b> to give it an imaginary part.</p>
+          <p><code class="try">r = 1.5</code> then <code class="try">|z - i| = r</code></p>
+          <p>A named complex number gets two sliders, either <b>Re / Im</b> or <b>modulus / argument</b>; switch between them under the line.</p>
+          <p><code class="try">c = 1 + 2i</code> <code class="try">w = 2e^(πi/3)</code></p>
+          <p>If you use a letter that isn't defined yet, click <b>add slider</b> under the line.</p>
+        </section>
+        <section>
+          <h3>Handy to know</h3>
+          <ul>
+            <li>Functions: <code>Re Im arg |z| conj sqrt exp ln sin cos tan cis</code></li>
+            <li><code>pi</code> → π, <code>&lt;=</code> → ≤, <code>&gt;=</code> → ≥ as you type. <code>45°</code> works for angles.</li>
+            <li><code>x</code> and <code>y</code> mean Re(z) and Im(z).</li>
+            <li>arg gives the principal value in (−π, π].</li>
+            <li><b>Enter</b> adds a new line, <b>↑ ↓</b> move between lines.</li>
+            <li>Click a coloured dot to hide a line or change its colour. Hover a line to pick out its graph.</li>
+            <li>On the graph: arrow keys pan, <b>+</b> / <b>−</b> zoom, <b>0</b> resets the view.</li>
+            <li>Your graph is saved in this browser automatically. Use <b>Share</b> to pass it on.</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="shareModal" hidden>
+    <div class="modal small" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <button class="modal-close" aria-label="Close">×</button>
+      <h2 id="shareTitle">Share this graph</h2>
+      <div id="shareLinkBlock">
+        <p class="lead">Anyone who opens this link sees your graph.</p>
+        <div class="copy-row"><input id="shareLink" readonly aria-label="Link to this graph"><button class="btn primary" id="copyLink">Copy link</button></div>
+      </div>
+      <p class="lead">Or copy this graph code. Pasting it into <b>Open a graph</b> below, in any copy of the grapher, shows exactly this graph.</p>
+      <div class="copy-row"><input id="shareCode" readonly aria-label="Graph code"><button class="btn primary" id="copyCode">Copy code</button></div>
+      <h3>Open a graph</h3>
+      <div class="copy-row"><input id="openCode" placeholder="Paste a graph code" aria-label="Graph code to open"><button class="btn" id="openCodeBtn">Open</button></div>
+      <p class="form-err" id="openErr" role="alert" hidden></p>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="imageModal" hidden>
+    <div class="modal small" role="dialog" aria-modal="true" aria-labelledby="imageTitle">
+      <button class="modal-close" aria-label="Close">×</button>
+      <h2 id="imageTitle">Save image</h2>
+      <img id="exportImg" class="export-img" alt="The current graph as an image">
+      <div class="img-actions">
+        <a class="btn primary" id="downloadImg" download="complex-plane.png">Download PNG</a>
+        <button class="btn" id="copyImg">Copy image</button>
+      </div>
+      <p class="lead small-print" id="imgHint"></p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastAction" hidden></button></div>
+
+  <script src="js/complex.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/mathrender.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
