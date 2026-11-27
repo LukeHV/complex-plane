@@ -358,8 +358,26 @@
       }
       return { kind: 'Region', text: `${inside ? 'inside' : 'outside'} the ellipse with foci ${F(c)} and ${F(c2)}` };
     }
-    if (A.type === 'bin' && A.op === '-' && (c = argC(A.a)) && (c2 = argC(A.b)) && (r = realConst(B)) !== null && o === 'eq') {
-      return { kind: 'Arc', text: `arc of a circle with endpoints ${F(c)} and ${F(c2)}` };
+    // arg((z − a)/(z − b)) = θ, or arg(z − a) − arg(z − b) = θ: an arc of a circle through a and b
+    let ab = null;
+    if (A.type === 'bin' && A.op === '-' && (c = argC(A.a)) && (c2 = argC(A.b))) ab = [c, c2];
+    else if (A.type === 'call' && A.fn === 'arg' && A.args[0].type === 'bin' && A.args[0].op === '/' &&
+      (c = zMinus(A.args[0].a)) && (c2 = zMinus(A.args[0].b))) ab = [c, c2];
+    if (ab && (r = realConst(B)) !== null && o === 'eq' && Cx.abs(Cx.sub(ab[0], ab[1])) > 1e-12) {
+      const [a, b] = ab;
+      const th = r - TAU * Math.round(r / TAU); // principal value, in (−π, π]
+      info.openPoints = [a, b];
+      const ends = `${F(a)} and ${F(b)}`;
+      if (Math.abs(th) < 1e-12) return { kind: 'Line', text: `the line through ${ends}, except the segment between them` };
+      if (Math.abs(Math.abs(th) - Math.PI) < 1e-12) return { kind: 'Segment', text: `between ${ends}; the end points are not included` };
+      // centre = (a − b·e^{2iθ}) / (1 − e^{2iθ})
+      const e2 = C(Math.cos(2 * th), Math.sin(2 * th));
+      const centre = Cx.div(Cx.sub(a, Cx.mul(b, e2)), Cx.sub(C(1, 0), e2));
+      const tidy = (v) => C(Math.abs(v.re) < 1e-12 ? 0 : v.re, Math.abs(v.im) < 1e-12 ? 0 : v.im);
+      return {
+        kind: 'Arc',
+        text: `${Math.abs(Math.abs(th) - Math.PI / 2) < 1e-12 ? 'half' : Math.abs(th) > Math.PI / 2 ? 'minor arc' : 'major arc'} of the circle centre ${F(tidy(centre))}, radius ${N(Cx.abs(Cx.sub(a, centre)))}, from ${F(b)} to ${F(a)}; the end points are not included`,
+      };
     }
     const ri = reIm(A);
     if (ri && (r = realConst(B)) !== null) {
@@ -388,7 +406,8 @@
     canvas.height = Math.max(1, Math.round(H * DPR));
     if (pendingHome && W > 0 && H > 0) { pendingHome = false; homeView(); }
     fitAllMath();
-    requestRender(false);
+    // Setting canvas.width clears it; draw now so no blank frame flashes before the next rAF.
+    render(false);
   }
 
   let homeHalfWidth = 0;
@@ -457,7 +476,10 @@
     byKind('locus').forEach((it) => emph(it, () => {
       const info = analysis.infos.get(it.id);
       if (info.extraPoint) drawDot(info.extraPoint.re, info.extraPoint.im, it.color, null, false);
-      if (info.openPoint && info.atoms.length === 1) drawOpenCircle(info.openPoint, it.color);
+      if (info.atoms.length === 1) {
+        if (info.openPoint) drawOpenCircle(info.openPoint, it.color);
+        if (info.openPoints) info.openPoints.forEach((p) => drawOpenCircle(p, it.color));
+      }
     }));
     // points last, so a defined point is never hidden under a curve's end marker
     byKind('point').forEach((it) => emph(it, () => drawPointItem(analysis.infos.get(it.id), it)));
@@ -661,7 +683,9 @@
   }
 
   // ---------- contours (marching squares with root refinement) ----------
-  function contourLines(f, cell) {
+  // jumps: also keep sign changes that are jumps, not roots. An inequality's truth flips there
+  // (e.g. arg(z) < π/4 along the negative real axis), so that is a real edge of the region.
+  function contourLines(f, cell, jumps) {
     const nx = Math.ceil(W / cell) + 2, ny = Math.ceil(H / cell) + 2;
     const wx0 = toWX(-cell), wy0 = toWY(-cell), dw = cell / view.scale;
     const vals = new Float64Array(nx * ny);
@@ -683,7 +707,7 @@
         const m = (lo + hi) / 2;
         const fm = f(ax + (bx - ax) * m, ay + (by - ay) * m);
         // A real root has |f| tiny here; a jump (e.g. arg's branch cut) does not.
-        if (Math.abs(fm) <= 0.02 * (Math.abs(fa) + Math.abs(fb)) + 1e-12) {
+        if (jumps || Math.abs(fm) <= 0.02 * (Math.abs(fa) + Math.abs(fb)) + 1e-12) {
           res = [(i1 + (i2 - i1) * m - 1) * cell, (j1 + (j2 - j1) * m - 1) * cell];
         }
       }
@@ -830,7 +854,7 @@
     const single = tree.type === 'atom';
     atoms.forEach((at, i) => {
       const f = (x, y) => atomVal(at, x, y);
-      let lines = refineLines(contourLines(f, cell), f);
+      let lines = refineLines(contourLines(f, cell, at.op !== 'eq'), f);
       if (!single) {
         const keep = at.op === 'eq'
           ? (p) => evalTree(tree, atoms, toWX(p[0]), toWY(p[1]), { i, v: true }, false)
@@ -1752,7 +1776,21 @@
     let dy = e.deltaY * (e.deltaMode === 1 ? 30 : e.deltaMode === 2 ? 300 : 1);
     const factor = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0018));
     zoomAt(x, y, factor, true);
+    updateHover(x, y); // the world point under the cursor changed, so the readout must too
   }, { passive: false });
+
+  // Safari sends trackpad pinches as gesture events, not ctrl+wheel. Without this the whole
+  // page zooms (blurry, jumping layout) instead of the graph.
+  let gestureScale = 1;
+  canvas.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureScale = 1; });
+  canvas.addEventListener('gesturechange', (e) => {
+    e.preventDefault();
+    const [x, y] = evtPos(e);
+    zoomAt(x, y, e.scale / gestureScale, true);
+    gestureScale = e.scale;
+    updateHover(x, y);
+  });
+  canvas.addEventListener('gestureend', (e) => { e.preventDefault(); requestRender(false); });
 
   canvas.addEventListener('dblclick', (e) => {
     const [x, y] = evtPos(e);
