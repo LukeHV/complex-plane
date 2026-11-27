@@ -283,18 +283,55 @@
       }
       return null;
     };
+    // |αz + β| = |α|·|z − c| with c = −β/α: returns { c, m: |α| } when the inside is affine in z.
+    const absAff = (n) => {
+      const c0 = absC(n);
+      if (c0) return { c: c0, m: 1 };
+      if (n.type !== 'call' || (n.fn !== 'abs' && n.fn !== 'mod')) return null;
+      let fz;
+      try {
+        const d = P.depsOf(n.args[0], ctx);
+        if (d.size !== 1 || !d.has('z')) return null;
+        fz = P.compile(n.args[0], ctx);
+      } catch (e) { return null; }
+      const at = (z) => fz({ z, t: 0, loc: null });
+      const beta = at(C(0, 0)), alpha = Cx.sub(at(C(1, 0)), beta);
+      if (!finite(beta) || !finite(alpha) || Cx.abs(alpha) < 1e-12) return null;
+      for (const z of [C(0, 1), C(-1.7, 0.6), C(2.3, -3.1)]) {
+        const want = Cx.add(Cx.mul(alpha, z), beta), got = at(z);
+        if (!finite(got) || Cx.abs(Cx.sub(got, want)) > 1e-9 * (1 + Cx.abs(want))) return null;
+      }
+      const c = Cx.div(Cx.neg(beta), alpha);
+      return { c: C(Math.abs(c.re) < 1e-12 ? 0 : c.re, Math.abs(c.im) < 1e-12 ? 0 : c.im), m: Cx.abs(alpha) };
+    };
     const argC = (n) => (n.type === 'call' && n.fn === 'arg') ? zMinus(n.args[0]) : null;
     const realConst = (n) => {
       if (!isConst(n)) return null;
       const v = val(n);
       return Math.abs(v.im) < 1e-12 && Number.isFinite(v.re) ? v.re : null;
     };
-    const F = (c) => M.wrap(M.complex(c));
-    const N = (x) => M.wrap(M.real(x));
-    const ANG = (a) => M.wrap(M.angle(a));
+    // Inline in a 12.5 px status line: the small maths size used by point statuses.
+    const sm = (h) => `<span class="math sm">${h}</span>`;
+    const F = (c) => sm(M.complex(c));
+    const N = (x) => sm(M.real(x));
+    const ANG = (a) => sm(M.angle(a));
     const reIm = (n) => n.type === 'call' && (n.fn === 're' || n.fn === 'im') && isZ(n.args[0]) ? n.fn
       : (n.type === 'name' && (n.name === 'x' || n.name === 'y')) ? (n.name === 'x' ? 're' : 'im') : null;
 
+    if (node.type === 'and' && node.chain && node.a.type === 'rel' && node.b.type === 'rel' && node.a.b === node.b.a) {
+      // r1 < |z − c| < r2 (any mix of < and ≤): an annulus
+      const mid = absAff(node.a.b), r1 = realConst(node.a.a), r2 = realConst(node.b.b);
+      const up = (o) => o === 'lt' || o === 'le';
+      if (mid && r1 !== null && r2 !== null && up(node.a.op) && up(node.b.op) && r2 / mid.m > Math.max(0, r1 / mid.m)) {
+        const inc = (o) => (o === 'le' ? 'included' : 'not included');
+        const a1 = r1 / mid.m, a2 = r2 / mid.m;
+        if (a1 < 0 || (a1 === 0 && node.a.op === 'le')) {
+          return { kind: 'Region', text: `inside the circle centre ${F(mid.c)}, radius ${N(a2)} (edge ${inc(node.b.op)})` };
+        }
+        if (a1 === 0) return { kind: 'Region', text: `inside the circle centre ${F(mid.c)}, radius ${N(a2)} (edge ${inc(node.b.op)}), except the centre itself` };
+        return { kind: 'Region', text: `between the circles centre ${F(mid.c)}, radii ${N(a1)} and ${N(a2)} (inner edge ${inc(node.a.op)}, outer edge ${inc(node.b.op)})` };
+      }
+    }
     if (node.type === 'and' || node.type === 'or') {
       if (info.hasFill) return { kind: 'Region', text: 'shaded where the conditions hold' };
       return { kind: 'Curve', text: 'the part of the curve where the other conditions hold' };
@@ -309,8 +346,9 @@
     const inside = o === 'lt' || o === 'le';
     const incl = (o === 'le' || o === 'ge') ? ' (edge included)' : ' (edge not included)';
 
-    let c, r;
-    if ((c = absC(A)) && (r = realConst(B)) !== null) {
+    let c, r, aff;
+    if ((aff = absAff(A)) && (r = realConst(B)) !== null) {
+      c = aff.c; r /= aff.m;
       if (o === 'eq') {
         if (r > 0) return { kind: 'Circle', text: `centre ${F(c)}, radius ${N(r)}` };
         if (r === 0) { info.extraPoint = c; return { kind: 'Point', text: `just the point ${F(c)}` }; }
@@ -332,6 +370,14 @@
       else if (absC(B.a) && realConst(B.b) !== null) { kNode = B.b; other = B.a; }
       if (kNode) {
         const k = realConst(kNode); c2 = absC(other);
+        const same = Cx.abs(Cx.sub(c, c2)) < 1e-12;
+        // k = 0 leaves |z − c| = 0; k < 0 asks a distance to equal a negative number (only 0 = 0 works).
+        if (Math.abs(k) < 1e-12 || (k < 0 && same)) { info.extraPoint = c; return { kind: 'Point', text: `just the point ${F(c)}` }; }
+        if (k < 0) return { kind: 'Empty', text: 'no points – a distance can’t be negative' };
+        if (same) {
+          if (Math.abs(k - 1) <= 1e-12) return { kind: 'Everywhere', text: 'both distances are always equal' };
+          info.extraPoint = c; return { kind: 'Point', text: `just the point ${F(c)}` };
+        }
         if (k > 0 && Math.abs(k - 1) > 1e-12) {
           // |z-c| = k|z-c2|  ->  circle with centre (c - k^2 c2)/(1 - k^2), radius k|c-c2|/|1-k^2|
           const k2 = k * k;
@@ -342,8 +388,16 @@
         if (Math.abs(k - 1) <= 1e-12) return { kind: 'Line', text: `perpendicular bisector of ${F(c)} and ${F(c2)}` };
       }
     }
+    // arg gives the principal value, −π < arg ≤ π: outside that range an equation has no points.
+    const outOfRange = (th) => th > Math.PI + 1e-12 || th <= -Math.PI + 1e-12;
+    const noArg = (th) => {
+      info.empty = true;
+      const p = th - TAU * Math.round(th / TAU), same = Math.abs(p + Math.PI) < 1e-12 ? Math.PI : p;
+      return { kind: 'Empty', text: `no points – arg takes values with −π &lt; arg ≤ π. Did you mean ${ANG(same)}?` };
+    };
     if ((c = argC(A)) && (r = realConst(B)) !== null) {
       if (o === 'eq') {
+        if (outOfRange(r)) return noArg(r);
         info.openPoint = c;
         return { kind: 'Half-line', text: `from ${F(c)} at angle ${ANG(r)}; the end point ${F(c)} is not included` };
       }
@@ -364,6 +418,7 @@
     else if (A.type === 'call' && A.fn === 'arg' && A.args[0].type === 'bin' && A.args[0].op === '/' &&
       (c = zMinus(A.args[0].a)) && (c2 = zMinus(A.args[0].b))) ab = [c, c2];
     if (ab && (r = realConst(B)) !== null && o === 'eq' && Cx.abs(Cx.sub(ab[0], ab[1])) > 1e-12) {
+      if (A.type === 'call' && outOfRange(r)) return noArg(r);
       const [a, b] = ab;
       const th = r - TAU * Math.round(r / TAU); // principal value, in (−π, π]
       info.openPoints = [a, b];
@@ -685,7 +740,9 @@
   // ---------- contours (marching squares with root refinement) ----------
   // jumps: also keep sign changes that are jumps, not roots. An inequality's truth flips there
   // (e.g. arg(z) < π/4 along the negative real axis), so that is a real edge of the region.
-  function contourLines(f, cell, jumps) {
+  // levels > 0: also look inside same-sign cells near the curve on a finer quadtree, so two
+  // branches closer together than one cell (the vertex of a wide parabola) are not lost.
+  function contourLines(f, cell, jumps, levels = 0) {
     const nx = Math.ceil(W / cell) + 2, ny = Math.ceil(H / cell) + 2;
     const wx0 = toWX(-cell), wy0 = toWY(-cell), dw = cell / view.scale;
     const vals = new Float64Array(nx * ny);
@@ -732,6 +789,88 @@
         else if (c.length === 4) {
           const fc = f(wx0 + (i + 0.5) * dw, wy0 - (j + 0.5) * dw);
           if ((fc > 0) === s00) { addSeg(e[0], e[1]); addSeg(e[2], e[3]); } else { addSeg(e[0], e[3]); addSeg(e[1], e[2]); }
+        }
+      }
+    }
+    if (levels > 0) {
+      // Quadtree below the grid: level L has cells of cell / 2^L px. Values are cached on the finest grid.
+      const FS = 1 << levels, fd = dw / FS, fnx = (nx - 1) * FS + 1;
+      const fcache = new Map();
+      const fvF = (FI, FJ) => {
+        if (FI % FS === 0 && FJ % FS === 0) return vals[(FJ / FS) * nx + FI / FS];
+        const key = FJ * fnx + FI;
+        let v = fcache.get(key);
+        if (v === undefined) { v = f(wx0 + FI * fd, wy0 - FJ * fd); fcache.set(key, v); }
+        return v;
+      };
+      const fEdge = (key, I1, J1, I2, J2) => {
+        if (pts.has(key)) return;
+        const fa = fvF(I1, J1), fb = fvF(I2, J2);
+        const ax = wx0 + I1 * fd, ay = wy0 - J1 * fd, bx = wx0 + I2 * fd, by = wy0 - J2 * fd;
+        let lo = 0, hi = 1, flo = fa, ok = true;
+        for (let k = 0; k < 12; k++) {
+          const m = (lo + hi) / 2;
+          const fm = f(ax + (bx - ax) * m, ay + (by - ay) * m);
+          if (fm !== fm) { ok = false; break; }
+          if ((fm > 0) === (flo > 0)) { lo = m; flo = fm; } else hi = m;
+        }
+        let res = null;
+        if (ok) {
+          const m = (lo + hi) / 2;
+          const fm = f(ax + (bx - ax) * m, ay + (by - ay) * m);
+          if (jumps || Math.abs(fm) <= 0.02 * (Math.abs(fa) + Math.abs(fb)) + 1e-12) {
+            const fc = cell / FS;
+            res = [(I1 + (I2 - I1) * m) * fc - cell, (J1 + (J2 - J1) * m) * fc - cell];
+          }
+        }
+        pts.set(key, res);
+      };
+      let cellBudget = 30000;
+      // A same-sign cell can only hide a zero if f bends enough to dip below its smallest |f|
+      // (a straight f can't reach 0 between same-sign corners; a quadratic with second difference
+      // `bend` per cell dips at most bend/8). `bend` shrinks 4× per level. Such cells are split,
+      // down to `levels` times; 4·m < bend leaves a 2× margin.
+      const subCell = (fi, fj, L, bend) => {
+        if (cellBudget-- <= 0) return;
+        const u = 1 << (levels - L), I = fi * u, J = fj * u;
+        const w00 = fvF(I, J), w10 = fvF(I + u, J), w01 = fvF(I, J + u), w11 = fvF(I + u, J + u);
+        if (w00 !== w00 || w10 !== w10 || w01 !== w01 || w11 !== w11) return;
+        const t00 = w00 > 0, t10 = w10 > 0, t01 = w01 > 0, t11 = w11 > 0;
+        if (t00 === t10 && t10 === t01 && t01 === t11) {
+          const m = Math.min(Math.abs(w00), Math.abs(w10), Math.abs(w01), Math.abs(w11));
+          const b2 = Math.max(bend, Math.abs(w00 - w10 - w01 + w11));
+          if (L < levels && 4 * m < b2) for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) subCell(fi * 2 + a, fj * 2 + b, L + 1, b2 / 4);
+          return;
+        }
+        const K = (x, y, h) => 'f' + ((y * fnx + x) * 2 + h);
+        const e = [];
+        if (t00 !== t10) { const k = K(I, J, 0) + ':' + u; fEdge(k, I, J, I + u, J); e.push(k); } else e.push(null);
+        if (t10 !== t11) { const k = K(I + u, J, 1) + ':' + u; fEdge(k, I + u, J, I + u, J + u); e.push(k); } else e.push(null);
+        if (t01 !== t11) { const k = K(I, J + u, 0) + ':' + u; fEdge(k, I, J + u, I + u, J + u); e.push(k); } else e.push(null);
+        if (t00 !== t01) { const k = K(I, J, 1) + ':' + u; fEdge(k, I, J, I, J + u); e.push(k); } else e.push(null);
+        const c = e.filter((k) => k);
+        if (c.length === 2) addSeg(c[0], c[1]);
+        else if (c.length === 4) {
+          const fcen = f(wx0 + (I + u / 2) * fd, wy0 - (J + u / 2) * fd);
+          if ((fcen > 0) === t00) { addSeg(e[0], e[1]); addSeg(e[2], e[3]); } else { addSeg(e[0], e[3]); addSeg(e[1], e[2]); }
+        }
+      };
+      // Largest second difference of f at each grid node (x and y directions).
+      const b2 = new Float64Array(nx * ny);
+      for (let j = 1; j < ny - 1; j++) {
+        for (let i = 1, k = j * nx + 1; i < nx - 1; i++, k++) {
+          const c = 2 * vals[k];
+          b2[k] = Math.max(Math.abs(vals[k - 1] - c + vals[k + 1]), Math.abs(vals[k - nx] - c + vals[k + nx]));
+        }
+      }
+      for (let j = 1; j < ny - 2; j++) {
+        for (let i = 1, k = j * nx + 1; i < nx - 2; i++, k++) {
+          const v00 = vals[k], v10 = vals[k + 1], v01 = vals[k + nx], v11 = vals[k + nx + 1];
+          if (v00 > 0 ? !(v10 > 0 && v01 > 0 && v11 > 0) : !(v10 <= 0 && v01 <= 0 && v11 <= 0)) continue; // NaN fails too
+          const m = Math.min(Math.abs(v00), Math.abs(v10), Math.abs(v01), Math.abs(v11));
+          const bend = Math.max(Math.abs(v00 - v10 - v01 + v11), b2[k], b2[k + 1], b2[k + nx], b2[k + nx + 1]);
+          if (!(4 * m < bend)) continue;
+          for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) subCell(i * 2 + a, j * 2 + b, 1, bend / 4);
         }
       }
     }
@@ -849,12 +988,13 @@
   }
 
   function drawLocusLines(info, color, fast) {
+    if (info.empty) return;
     const cell = fast ? 6 : 3;
     const { atoms, tree } = info;
     const single = tree.type === 'atom';
     atoms.forEach((at, i) => {
       const f = (x, y) => atomVal(at, x, y);
-      let lines = refineLines(contourLines(f, cell, at.op !== 'eq'), f);
+      let lines = refineLines(contourLines(f, cell, at.op !== 'eq', fast ? 4 : 3), f);
       if (!single) {
         const keep = at.op === 'eq'
           ? (p) => evalTree(tree, atoms, toWX(p[0]), toWY(p[1]), { i, v: true }, false)
@@ -878,21 +1018,30 @@
   function sampleParam(info, fast) {
     const env = { z: C(0, 0), t: 0, loc: null };
     const lim = 4 * (W + H);
+    // Samples keep their true screen position even far off-screen, so that at high zoom an
+    // interval whose ends are both outside the view can still be subdivided into the visible piece.
     const at = (t) => {
       env.t = t;
       const v = info.fn(env);
       const sx = toSX(v.re), sy = toSY(v.im);
-      return Number.isFinite(sx) && Number.isFinite(sy) && Math.abs(sx) < lim && Math.abs(sy) < lim ? [sx, sy, t] : null;
+      return Number.isFinite(sx) && Number.isFinite(sy) ? [sx, sy, t] : null;
     };
     const N = fast ? 240 : 600;
     const jump = (W + H) / 2;
     let budget = fast ? 8000 : 40000;
     const out = [];
+    // Could the curve between these samples reach the view? (box of the three samples, grown by the chord)
+    const near = (pa, pm, pb, len) => {
+      const pad = len + 4;
+      return Math.max(pa[0], pm[0], pb[0]) > -pad && Math.min(pa[0], pm[0], pb[0]) < W + pad
+        && Math.max(pa[1], pm[1], pb[1]) > -pad && Math.min(pa[1], pm[1], pb[1]) < H + pad;
+    };
     const sub = (ta, pa, tb, pb, depth) => {
-      if (!pa || !pb || depth > 14 || budget-- <= 0) return;
+      if (!pa || !pb || depth > 40 || budget-- <= 0) return;
       const tm = (ta + tb) / 2, pm = at(tm);
       if (!pm) return;
       const len = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]);
+      if (!near(pa, pm, pb, len)) return;
       const dev = Math.hypot(pm[0] - (pa[0] + pb[0]) / 2, pm[1] - (pa[1] + pb[1]) / 2);
       if (dev > 0.25 || len > 6) {
         sub(ta, pa, tm, pm, depth + 1);
@@ -910,17 +1059,34 @@
       out.push(cur);
       prev = cur;
     }
-    // break where the curve is undefined or jumps across the screen (e.g. through a pole)
+    // Clip each segment to a box around the view (huge canvas coordinates draw badly), and
+    // break where the curve is undefined or jumps across the screen (e.g. through a pole).
+    const clip = (p, q) => {
+      let u0 = 0, u1 = 1;
+      const dx = q[0] - p[0], dy = q[1] - p[1];
+      const edges = [[-dx, p[0] + lim], [dx, lim - p[0]], [-dy, p[1] + lim], [dy, lim - p[1]]];
+      for (const [pp, qq] of edges) {
+        if (pp === 0) { if (qq < 0) return null; continue; }
+        const r = qq / pp;
+        if (pp < 0) { if (r > u1) return null; if (r > u0) u0 = r; } else { if (r < u0) return null; if (r < u1) u1 = r; }
+      }
+      const P = (u) => [p[0] + u * dx, p[1] + u * dy, p[2] + u * (q[2] - p[2])];
+      return [u0 === 0 ? p : P(u0), u1 === 1 ? q : P(u1)];
+    };
     const lines = [];
     let line = [];
-    for (const q of out) {
-      if (!q) { if (line.length > 1) lines.push(line); line = []; continue; }
+    const flush = () => { if (line.length > 1) lines.push(line); line = []; };
+    for (let k = 1; k < out.length; k++) {
+      const p = out[k - 1], q = out[k];
+      const seg = p && q ? clip(p, q) : null;
+      if (!seg || Math.hypot(seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]) > jump) { flush(); continue; }
       const last = line[line.length - 1];
-      if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) > jump) { if (line.length > 1) lines.push(line); line = []; }
-      line.push(q);
+      if (!last || last[0] !== seg[0][0] || last[1] !== seg[0][1]) { flush(); line.push(seg[0]); }
+      line.push(seg[1]);
     }
-    if (line.length > 1) lines.push(line);
-    return { lines, first: out[0] };
+    flush();
+    const f = out[0];
+    return { lines, first: f && Math.abs(f[0]) < lim && Math.abs(f[1]) < lim ? f : null };
   }
 
   function drawParam(info, color, fast) {
@@ -1346,10 +1512,10 @@
         if (!info.rootsKey) return k('Solutions') + 'solving…';
         if (info.intersect) {
           if (!n) return k('Intersection') + 'the curves don\'t meet in view';
-          return k(n === 1 ? '1 intersection' : `${n} intersections`) + info.roots.slice(0, 12).map((r) => MV(M.complex(r))).join(', ');
+          return k(n === 1 ? '1 intersection' : `${n} intersections`) + info.roots.slice(0, 12).map((r) => MV(M.complexExact(r))).join(', ');
         }
         if (!n) return k('Solutions') + 'none found in view – try zooming out';
-        const list = info.roots.slice(0, 12).map((r) => MV(M.complex(r))).join(', ');
+        const list = info.roots.slice(0, 12).map((r) => MV(M.complexExact(r))).join(', ');
         return k(n === 1 ? '1 solution' : `${n} solutions`) + list + (n > 12 ? ', …' : '') + (n > 1 ? ' <i>(in view)</i>' : '');
       }
       case 'hint': return k('Almost') + 'add <b>= 2</b> or <b>&lt; 2</b> (any value) to draw a locus or region';
@@ -1416,13 +1582,13 @@
     if (Math.abs(th) < 1e-12) return '0i';
     for (let d = 1; d <= 360; d++) {
       const k = th / Math.PI * d, rk = Math.round(k);
-      if (Math.abs(k - rk) < 1e-7 && rk !== 0) {
+      if (Math.abs(k - rk) < 1e-9 && rk !== 0) {
         const g = gcd(Math.abs(rk), d), n = rk / g, dd = d / g;
         const top = (n < 0 ? '-' : '') + (Math.abs(n) === 1 ? '' : Math.abs(n)) + 'πi';
         return dd === 1 ? top : `${top}/${dd}`;
       }
     }
-    return exactish(th) + 'i';
+    return precise(th, 1) + 'i';
   }
   function gcd(a, b) { while (b) [a, b] = [b, a % b]; return a; }
   function polarText(r, th, rStr) {
@@ -1448,24 +1614,47 @@
     if (part === 'val') return writeRhs(it, info, fixed(v, dec));
     if (part === 're' || part === 'im') {
       const re = part === 're' ? v : info.value.re, im = part === 'im' ? v : info.value.im;
-      return writeRhs(it, info, cartText(re, im, part === 're' ? fixed(v, dec) : null, part === 'im' ? fixed(Math.abs(v), dec) : null));
+      const sc = Math.hypot(re, im);
+      return writeRhs(it, info, cartText(re, im, part === 're' ? fixed(v, dec) : precise(re, sc), part === 'im' ? fixed(Math.abs(v), dec) : precise(Math.abs(im), sc)));
     }
     const r = part === 'mod' ? Math.max(0, v) : Cx.abs(info.value);
     const th = part === 'arg' ? v : (Cx.arg(info.value) || 0);
-    writeRhs(it, info, polarText(r, th, part === 'mod' ? fixed(r, dec) : null));
+    writeRhs(it, info, polarText(r, th, part === 'mod' ? fixed(r, dec) : modText(r)));
   }
 
+  // Precise decimal text for a form switch: 12 s.f., so the point doesn't move; never e-notation.
+  const precise = (v, scale) => {
+    const tol = 1e-11 * Math.max(1, scale);
+    if (!Number.isFinite(v) || Math.abs(v) < tol) return '0';
+    // Prefer the shortest decimal (up to 12 s.f.) that is within float residue of v.
+    let t = String(+v.toPrecision(12));
+    for (let p = 1; p < 12; p++) { const c = +v.toPrecision(p); if (Math.abs(c - v) < tol) { t = String(c); break; } }
+    if (/e/i.test(t)) t = v.toFixed(14).replace(/0+$/, '').replace(/\.$/, '');
+    return t === '-0' ? '0' : t;
+  };
+  // Modulus as written on paper: an integer, √k or n√k when it is one, else a precise decimal.
+  function modText(r) {
+    const e = M.exactParts(r);
+    if (e && !e.pi && e.d === 1) return e.k === 1 ? String(e.n) : `${e.n === 1 ? '' : e.n}sqrt(${e.k})`;
+    return precise(r, r);
+  }
   function switchForm(it, form) {
     const info = analysis.infos.get(it.id);
     if (!info || info.kind !== 'point' || info.form === form) return;
     stopPlaying(it);
-    const v = info.value;
-    if (form === 'polar') writeRhs(it, info, polarText(+Cx.abs(v).toPrecision(6), Math.round((Cx.arg(v) || 0) / (Math.PI / 180)) * Math.PI / 180));
-    else {
-      const tidy = (x) => (Math.abs(x) < 1e-9 * Math.max(1, Cx.abs(v)) ? 0 : +x.toPrecision(6));
-      const re = tidy(v.re), im = tidy(v.im);
-      writeRhs(it, info, cartText(re, im, exactish(re), exactish(Math.abs(im))));
+    const v = info.value, scale = Cx.abs(v);
+    const rhsNow = info.name ? it.text.replace(/^[^=]*=\s*/, '') : it.text;
+    const memo = it.formMemo;
+    // Toggling back to a form we came from, with the point unmoved: restore the text the user had.
+    if (memo && memo.form === form && Math.abs(memo.re - v.re) + Math.abs(memo.im - v.im) < 1e-9 * Math.max(1, scale)) {
+      writeRhs(it, info, memo.rhs);
+    } else if (form === 'polar') {
+      writeRhs(it, info, polarText(scale, Cx.arg(v) || 0, modText(scale)));
+    } else {
+      const re = precise(v.re, scale), im = precise(v.im, scale);
+      writeRhs(it, info, cartText(+re, +im, re, im.replace('-', '')));
     }
+    it.formMemo = { form: info.form, rhs: rhsNow, re: v.re, im: v.im };
     changed();
   }
 

@@ -5,7 +5,7 @@
 (function (G) {
   'use strict';
   const P = G.CPARSER;
-  const { fmtNum } = G.CX;
+  const { fmtNum, fmtComplex } = G.CX;
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const MINUS = '−';
@@ -243,6 +243,52 @@
     return real(re, sig, useFrac) + mo(im < 0 ? MINUS : '+') + imPart(im);
   }
 
+  // x = (a + b√k)/d with small integers, a ≠ 0, k > 1 (e.g. (1 + √7)/2). Used for solutions only.
+  function surdSum(x) {
+    if (!Number.isFinite(x) || x === 0) return null;
+    for (const k of SQUAREFREE) {
+      if (k === 1) continue;
+      const rk = Math.sqrt(k);
+      for (let d = 1; d <= 12; d++) {
+        for (let b = -12; b <= 12; b++) {
+          if (!b) continue;
+          const a = x * d - b * rk, ra = Math.round(a);
+          if (ra !== 0 && Math.abs(ra) <= 100 && Math.abs(a - ra) < 1e-9 * Math.max(1, Math.abs(x) * d)) {
+            const g = gcd(gcd(Math.abs(ra), Math.abs(b)), d);
+            if (g === 1) return { a: ra, b, k, d };
+          }
+        }
+      }
+    }
+    return null;
+  }
+  function surdSumHTML(e) {
+    const top = mn(e.a) + mo(e.b < 0 ? MINUS : '+') + (Math.abs(e.b) === 1 ? '' : mn(Math.abs(e.b))) + sqrt(mn(e.k));
+    return e.d === 1 ? top : frac(top, mn(e.d), true);
+  }
+  // A solution: exact when each part is a fraction, surd or (a + b√k)/d, with "≈ decimal" beside it.
+  function complexExact(z) {
+    const plain = complex(z);
+    if (!z || !Number.isFinite(z.re) || !Number.isFinite(z.im)) return plain;
+    const scale = Math.max(1, Math.abs(z.re), Math.abs(z.im));
+    const re = Math.abs(z.re) < 1e-10 * scale ? 0 : z.re, im = Math.abs(z.im) < 1e-10 * scale ? 0 : z.im;
+    const simple = (v) => v === 0 || Math.abs(v - Math.round(v)) < 1e-9 * Math.max(1, Math.abs(v)) || !!exactParts(v);
+    const sr = simple(re) ? null : surdSum(re), si = simple(Math.abs(im)) ? null : surdSum(Math.abs(im));
+    if (!sr && !si) return plain;
+    if ((!sr && !simple(re)) || (!si && !simple(Math.abs(im)))) return plain;
+    const reH = re === 0 ? '' : sr ? surdSumHTML(sr) : real(re, 4, true);
+    let imH = '';
+    if (im !== 0) {
+      const body = si ? (si.d === 1 ? mo('(', 'mbr') + surdSumHTML(si) + mo(')', 'mbr') : surdSumHTML(si) + vh('*')) : (Math.abs(Math.abs(im) - 1) < 1e-12 ? '' : real(Math.abs(im), 4, true));
+      imH = body + mi('i');
+    }
+    let h;
+    if (!reH) h = (im < 0 ? mo(MINUS, 'mneg') : '') + imH;
+    else if (!imH) h = reH;
+    else h = reH + mo(im < 0 ? MINUS : '+') + imH;
+    return h + `<span class="approx"> ≈ ${esc(fmtComplex(z, 4))}</span>`;
+  }
+
   function angle(a) {
     if (Number.isNaN(a)) return mn('undefined');
     const deg = `<span class="approx"> (${esc(fmtNum(a * 180 / Math.PI, 4))}°)</span>`;
@@ -267,5 +313,5 @@
   // Wrap an HTML fragment as inline maths.
   const wrap = (h) => `<span class="math">${h}</span>`;
 
-  G.MATH = { renderLine, real, realApprox, complex, angle, wrap, name, plainName, exactParts };
+  G.MATH = { renderLine, real, realApprox, complex, complexExact, angle, wrap, name, plainName, exactParts };
 })(typeof window !== 'undefined' ? window : globalThis);
